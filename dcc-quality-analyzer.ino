@@ -71,6 +71,7 @@ static uint8_t _packetState = PACKET_STATE_UNKNOWN;
 static uint8_t _packetPreambleCount = 0;
 static uint8_t _packetDataBitCount = 0;
 
+static bool _printBitStream = true;
 static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
 
@@ -97,7 +98,7 @@ void setup() {
     Serial.print("DCC Quality Analyser V");
     Serial.println(VERSION);
 
-    Serial.println("Commands: b - line break, l - legend, s - toggle smart bit separator, S - toggle smart line break");
+    Serial.println("Commands: b - toggle bit stream, l - legend, s - toggle smart bit separator, S - toggle smart line break");
 }
 
 void loop() {
@@ -113,8 +114,9 @@ void handleInput() {
     auto ch = Serial.read();
     switch (ch) {
         case 'b':
-            Serial.println();
-            _bitCounter = 0;
+            _printBitStream = !_printBitStream;
+
+            PRINT_TOGGLE_STATE(_printBitStream, "Print bit stream");
             
             break;
 
@@ -159,6 +161,134 @@ void handleInput() {
     }
 }
 
+void printBit(uint8_t oldPacketState) {
+    if (_printBitStream == false) {
+        return;
+    }
+
+    if (_smartBitSeparator) {
+        if ((oldPacketState == PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_DATA_SEPARATOR) ||
+            (oldPacketState == PACKET_STATE_DATA && (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END))) {
+            Serial.print(" ");
+        }
+    }
+
+    switch (_buffer[_bufferRead]) {
+        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE:
+            Serial.print("1");
+            break;
+
+        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO:
+            Serial.print("0");
+            break;
+
+        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ZERO:
+            Serial.print("e");
+            break;
+
+        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ONE:
+            Serial.print("E");
+            break;
+
+        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ONE:
+            Serial.print("f");
+            break;
+
+        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ZERO:
+            Serial.print("F");
+            break;
+
+        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_FAILURE:
+            Serial.print("s");
+            break;
+
+        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_FAILURE:
+            Serial.print("S");
+            break;
+
+        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_FAILURE:
+            Serial.print("b");
+            break;
+
+        default:
+            Serial.print("u");
+            Serial.print(_buffer[_bufferRead], HEX);
+            break;
+    }
+
+    // handle spaces and line breaks
+    if (_smartBitSeparator) {
+        if (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END) {
+            Serial.print(" ");
+        }
+    } else {
+        if (_bitCounter >= 8) {
+            _bitCounter = 0;
+
+            Serial.print(" ");
+        }
+    }
+
+    if (_smartLineBreak && _packetState == PACKET_STATE_END) {
+        Serial.println();
+    }
+}
+
+void updatePacketState() {
+    switch (_packetState) {
+        case PACKET_STATE_UNKNOWN:
+            if (IS_ONE_BIT(_bufferRead)) {
+                _packetPreambleCount = 0;
+
+                _packetState = PACKET_STATE_PREAMBLE;
+            }
+
+            break;
+
+        case PACKET_STATE_PREAMBLE:
+            if (IS_ZERO_BIT(_bufferRead) && _packetPreambleCount >= MIN_PREAMBLE_COUNT) {
+                _packetState = PACKET_STATE_DATA_SEPARATOR;
+            } else {
+                _packetPreambleCount++;
+            }
+
+            break;
+
+        case PACKET_STATE_DATA_SEPARATOR:
+            _packetState = PACKET_STATE_DATA;
+
+            break;
+
+        case PACKET_STATE_DATA:
+            if (_packetDataBitCount >= 7) {
+                _packetDataBitCount = 0;
+
+                if (IS_ZERO_BIT(_bufferRead)) {
+                    _packetState = PACKET_STATE_DATA_SEPARATOR;
+                } else if (IS_ONE_BIT(_bufferRead)) {
+                    _packetState = PACKET_STATE_END;
+                } else {
+                    _packetState = PACKET_STATE_UNKNOWN;
+                }
+            } else {
+                _packetDataBitCount++;
+            }
+
+            break;
+
+        case PACKET_STATE_END:
+            _packetPreambleCount = 0;
+
+            if (IS_ONE_BIT(_bufferRead)) {
+                _packetState = PACKET_STATE_PREAMBLE;
+            } else {
+                _packetState = PACKET_STATE_UNKNOWN;
+            }
+
+            break;
+    }
+}
+
 void printBuffer() {
     uint8_t oldPacketState;
 
@@ -166,128 +296,12 @@ void printBuffer() {
         // update packet state
         oldPacketState = _packetState;
 
-        switch (_packetState) {
-            case PACKET_STATE_UNKNOWN:
-                if (IS_ONE_BIT(_bufferRead)) {
-                    _packetPreambleCount = 0;
-
-                    _packetState = PACKET_STATE_PREAMBLE;
-                }
-
-                break;
-
-            case PACKET_STATE_PREAMBLE:
-                if (IS_ZERO_BIT(_bufferRead) && _packetPreambleCount >= MIN_PREAMBLE_COUNT) {
-                    _packetState = PACKET_STATE_DATA_SEPARATOR;
-                } else {
-                    _packetPreambleCount++;
-                }
-
-                break;
-
-            case PACKET_STATE_DATA_SEPARATOR:
-                _packetState = PACKET_STATE_DATA;
-
-                break;
-
-            case PACKET_STATE_DATA:
-                if (_packetDataBitCount >= 7) {
-                    _packetDataBitCount = 0;
-
-                    if (IS_ZERO_BIT(_bufferRead)) {
-                        _packetState = PACKET_STATE_DATA_SEPARATOR;
-                    } else if (IS_ONE_BIT(_bufferRead)) {
-                        _packetState = PACKET_STATE_END;
-                    } else {
-                        _packetState = PACKET_STATE_UNKNOWN;
-                    }
-                } else {
-                    _packetDataBitCount++;
-                }
-
-                break;
-
-            case PACKET_STATE_END:
-                _packetPreambleCount = 0;
-
-                if (IS_ONE_BIT(_bufferRead)) {
-                    _packetState = PACKET_STATE_PREAMBLE;
-                } else {
-                    _packetState = PACKET_STATE_UNKNOWN;
-                }
-
-                break;
-        }
+        updatePacketState();
 
         // print bit representation
-        if (_smartBitSeparator) {
-            if ((oldPacketState == PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_DATA_SEPARATOR) ||
-                    (oldPacketState == PACKET_STATE_DATA && (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END))) {
-                Serial.print(" ");
-            }
-        }
-
-        switch (_buffer[_bufferRead]) {
-            case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE:
-                Serial.print("1");
-                break;
-
-            case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO:
-                Serial.print("0");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ZERO:
-                Serial.print("e");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ONE:
-                Serial.print("E");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ONE:
-                Serial.print("f");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ZERO:
-                Serial.print("F");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_FAILURE:
-                Serial.print("s");
-                break;
-                
-            case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_FAILURE:
-                Serial.print("S");
-                break;
-
-            case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_FAILURE:
-                Serial.print("b");
-                break;
-
-            default:
-                Serial.print("u");
-                Serial.print(_buffer[_bufferRead], HEX);
-                break;
-        }
-
-        // handle spaces and line breaks
         _bitCounter++;
 
-        if (_smartBitSeparator) {
-            if (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END) {
-                Serial.print(" ");
-            }
-        } else {
-            if (_bitCounter >= 8) {
-                _bitCounter = 0;
-      
-                Serial.print(" ");
-            }
-        }
-
-        if (_smartLineBreak && _packetState == PACKET_STATE_END) {
-            Serial.println();
-        }
+        printBit(oldPacketState);
 
         // advance buffer
         _buffer[_bufferRead] = 0;
