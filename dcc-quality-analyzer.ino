@@ -55,7 +55,6 @@
 
 #define IS_ZERO_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO)
 #define IS_ONE_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE)
-#define IS_ERROR_BIT(x) _buffer[x] !IS_ZERO_BIT(x) && !IS_ONE_BIT(x)
 
 #define PRINT_TOGGLE_STATE(x, y) Serial.println(x ? "\n" y " ON" : "\n" y " OFF")
 
@@ -70,10 +69,16 @@ static uint8_t _bitCounter = 0;
 static uint8_t _packetState = PACKET_STATE_UNKNOWN;
 static uint8_t _packetPreambleCount = 0;
 static uint8_t _packetDataBitCount = 0;
+static uint8_t _packetErrors = 0;
+static uint32_t _totalPackets = 0;
+static uint32_t _errorPackets = 0;
+static uint32_t _totalErrors = 0;
 
-static bool _printBitStream = true;
+static bool _printBitStream = false;
 static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
+
+static unsigned long _lastUpdatePrint = 0;
 
 ////////////////////////////////////////
 // Functions
@@ -86,15 +91,15 @@ void externalInterruptHandler();
 
 void setup() {
     Serial.begin(115200);
-    
+
     pinMode(DCC_PIN, INPUT);
-    
+
     attachInterrupt(digitalPinToInterrupt(DCC_PIN), externalInterruptHandler, CHANGE);
 
     for (auto i = 0; i < BUFFER_SIZE; i++) {
         _buffer[i] = 0;
     }
-    
+
     Serial.print("DCC Quality Analyser V");
     Serial.println(VERSION);
 
@@ -117,7 +122,7 @@ void handleInput() {
             _printBitStream = !_printBitStream;
 
             PRINT_TOGGLE_STATE(_printBitStream, "Print bit stream");
-            
+
             break;
 
         case 'l':
@@ -156,7 +161,7 @@ void handleInput() {
 
         default:
             Serial.println("\nUnknown command");
-            
+
             break;
     }
 }
@@ -287,6 +292,10 @@ void updatePacketState() {
 
             break;
     }
+
+    if (IS_ZERO_BIT(_bufferRead) == false && IS_ONE_BIT(_bufferRead) == false) {
+        _packetErrors++;
+    }
 }
 
 void printBuffer() {
@@ -297,6 +306,17 @@ void printBuffer() {
         oldPacketState = _packetState;
 
         updatePacketState();
+
+        if (_packetState == PACKET_STATE_END) {
+            _totalPackets++;
+
+            if (_packetErrors > 0) {
+                _errorPackets++;
+                _totalErrors += _packetErrors;
+            }
+
+            _packetErrors = 0;
+        }
 
         // print bit representation
         _bitCounter++;
@@ -311,6 +331,26 @@ void printBuffer() {
             _bufferRead = 0;
         }
     }
+
+    auto now = millis();
+    if (_lastUpdatePrint == 0) {
+        _lastUpdatePrint = now;
+
+        return;
+    }
+
+    if (now - _lastUpdatePrint < 1000) {
+        return;
+    }
+
+    Serial.print("Total packets: ");
+    Serial.print(_totalPackets);
+    Serial.print(", total errors: ");
+    Serial.print(_totalErrors);
+    Serial.print(", error packet rate: ");
+    Serial.println((float) _errorPackets / (float) _totalPackets);
+
+    _lastUpdatePrint = now;
 }
 
 void externalInterruptHandler() {
