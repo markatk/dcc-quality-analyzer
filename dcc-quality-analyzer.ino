@@ -57,6 +57,8 @@
 #define IS_ONE_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE)
 #define IS_ERROR_BIT(x) _buffer[x] !IS_ZERO_BIT(x) && !IS_ONE_BIT(x)
 
+#define PRINT_TOGGLE_STATE(x, y) Serial.println(x ? "\n" y " ON" : "\n" y " OFF")
+
 static volatile uint8_t _buffer[BUFFER_SIZE] = {0};
 static volatile uint8_t _bufferRead = 0;
 static volatile uint8_t _bufferWrite = 0;
@@ -70,6 +72,7 @@ static uint8_t _packetPreambleCount = 0;
 static uint8_t _packetDataBitCount = 0;
 
 static bool _smartBitSeparator = true;
+static bool _smartLineBreak = true;
 
 ////////////////////////////////////////
 // Functions
@@ -94,7 +97,7 @@ void setup() {
     Serial.print("DCC Quality Analyser V");
     Serial.println(VERSION);
 
-    Serial.println("Commands: b - line break, l - legend, s - toggle smart bit separator");
+    Serial.println("Commands: b - line break, l - legend, s - toggle smart bit separator, S - toggle smart line break");
 }
 
 void loop() {
@@ -133,6 +136,15 @@ void handleInput() {
 
         case 's':
             _smartBitSeparator = !_smartBitSeparator;
+
+            PRINT_TOGGLE_STATE(_smartBitSeparator, "Smart bit separation");
+
+            break;
+
+        case 'S':
+            _smartLineBreak = !_smartLineBreak;
+
+            PRINT_TOGGLE_STATE(_smartLineBreak, "Smart line break");
 
             break;
 
@@ -271,6 +283,10 @@ void printBuffer() {
       
                 Serial.print(" ");
             }
+        }
+
+        if (_smartLineBreak && _packetState == PACKET_STATE_END) {
+            Serial.println();
         }
 
         // advance buffer
