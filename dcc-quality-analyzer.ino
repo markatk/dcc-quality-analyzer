@@ -63,7 +63,7 @@ static volatile uint8_t _buffer[BUFFER_SIZE] = {0};
 static volatile uint8_t _bufferRead = 0;
 static volatile uint8_t _bufferWrite = 0;
 
-static volatile unsigned long _lastMicros;
+static volatile unsigned long _lastMicros = 0;
 static volatile uint8_t _bitState;
 
 static uint8_t _bitCounter = 0;
@@ -301,12 +301,26 @@ void printBuffer() {
 
 void externalInterruptHandler() {
     auto _actualMicros = micros();
-    auto _bitMicros = _actualMicros - _lastMicros;
 
+    // if first change, discard data since timing did not start yet
+    if (_lastMicros == 0) {
+        _lastMicros = _actualMicros;
+
+        return;
+    }
+
+    auto _bitMicros = _actualMicros - _lastMicros;
     _lastMicros = _actualMicros;
 
-    auto val = digitalRead(DCC_PIN);
-    if (val == HIGH) {
+    if (_bitMicros > 9999) {
+        // reset packet
+        _packetState = PACKET_STATE_UNKNOWN;
+        _buffer[_bufferWrite] = 0;
+
+        return;
+    }
+
+    if ((_buffer[_bufferWrite] & 0x0F) == 0) {
         // upper part
         if (_bitMicros < 52) {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
