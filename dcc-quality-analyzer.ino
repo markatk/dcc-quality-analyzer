@@ -54,11 +54,8 @@ void externalInterruptHandler() {
     _lastMicros = _actualMicros;
 
     uint8_t val = digitalRead(DCC_PIN);
-
-    // first half (upper part)
-    if (val == LOW) {
-        _buffer[_bufferWrite] = 0;
-      
+    if (val == HIGH) {
+        // upper part
         if (_bitMicros < 52) {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
         } else if (_bitMicros < 65) {
@@ -66,21 +63,20 @@ void externalInterruptHandler() {
         } else {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ZERO;
         }
-
-        return;
-    }
-
-    if (_buffer[_bufferWrite] == 0) {
-        return;
-    }
-        
-    // second half (lower part)
-    if (_bitMicros < 52) {
-        _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
-    } else if (_bitMicros < 65) {
-        _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
     } else {
-        _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
+        // lower part
+        if (_bitMicros < 52) {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
+        } else if (_bitMicros < 65) {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
+        } else {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
+        }
+    }
+
+    // wait till both halfes of the bit are set
+    if ((_buffer[_bufferWrite] & 0x0F) == 0 || (_buffer[_bufferWrite] & 0xF0) == 0) {
+        return;
     }
 
     _bufferWrite++;
@@ -95,9 +91,13 @@ void setup() {
     pinMode(DCC_PIN, INPUT);
     
     attachInterrupt(digitalPinToInterrupt(DCC_PIN), externalInterruptHandler, CHANGE);
+
+    for (auto i = 0; i < BUFFER_SIZE; i++) {
+        _buffer[i] = 0;
+    }
     
     Serial.print("DCC Quality Analyser V");
-    Serial.print(VERSION);
+    Serial.println(VERSION);
 
     Serial.println("Commands: b - line break, l - legend");
 }
@@ -180,6 +180,7 @@ void loop() {
 
             default:
                 Serial.print("u");
+                Serial.print(_buffer[_bufferRead], HEX);
                 break;
         }
 
