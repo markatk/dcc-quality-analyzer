@@ -23,6 +23,8 @@ A DCC booster signal **MUST NOT** be connected directly to the arduino, otherwis
 - Error trigger pin with adjustable threshold rate
 - RailCom cutout detection
 - Missing signal trigger pin with adjustable threshold rate
+- Scope trigger pin for new packets
+- Preamble counter
 
 ## License
 

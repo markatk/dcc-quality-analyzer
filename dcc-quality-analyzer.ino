@@ -26,10 +26,36 @@
  * SOFTWARE.
  */
 
+////////////////////////////////////////
+// Configuration parameters
+////////////////////////////////////////
+
 #define DCC_PIN 2
 
+////////////////////////////////////////
+// Global variables and definitions
+////////////////////////////////////////
+
+#define BIT_STATE_FIRST_HALF_ONE 0x01
+#define BIT_STATE_FIRST_HALF_ZERO 0x03
+#define BIT_STATE_FIRST_HALF_FAILURE 0x02
+#define BIT_STATE_SECOND_HALF_ONE 0x10
+#define BIT_STATE_SECOND_HALF_ZERO 0x30
+#define BIT_STATE_SECOND_HALF_FAILURE 0x20
+
+#define PACKET_STATE_UNKNOWN 0x00
+#define PACKET_STATE_PREAMBLE 0x01
+#define PACKET_STATE_DATA_SEPARATOR 0x02
+#define PACKET_STATE_DATA 0x03
+#define PACKET_STATE_END 0x04
+
 #define BUFFER_SIZE 128
+#define MIN_PREAMBLE_COUNT 10
 #define VERSION "1.0"
+
+#define IS_ZERO_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO)
+#define IS_ONE_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE)
+#define IS_ERROR_BIT(x) _buffer[x] !IS_ZERO_BIT(x) && !IS_ONE_BIT(x)
 
 static volatile uint8_t _buffer[BUFFER_SIZE] = {0};
 static volatile uint8_t _bufferRead = 0;
@@ -39,51 +65,20 @@ static volatile unsigned long _lastMicros;
 static volatile uint8_t _bitState;
 
 static uint8_t _bitCounter = 0;
+static uint8_t _packetState = PACKET_STATE_UNKNOWN;
+static uint8_t _packetPreambleCount = 0;
+static uint8_t _packetDataBitCount = 0;
 
-#define BIT_STATE_FIRST_HALF_ONE 0x01
-#define BIT_STATE_FIRST_HALF_ZERO 0x03
-#define BIT_STATE_FIRST_HALF_FAILURE 0x02
-#define BIT_STATE_SECOND_HALF_ONE 0x10
-#define BIT_STATE_SECOND_HALF_ZERO 0x30
-#define BIT_STATE_SECOND_HALF_FAILURE 0x20
+static bool _smartBitSeparator = true;
 
-void externalInterruptHandler() {
-    unsigned long _actualMicros = micros();
-    unsigned long _bitMicros = _actualMicros - _lastMicros;
+////////////////////////////////////////
+// Functions
+////////////////////////////////////////
 
-    _lastMicros = _actualMicros;
+void handleInput();
+void printBuffer();
 
-    uint8_t val = digitalRead(DCC_PIN);
-    if (val == HIGH) {
-        // upper part
-        if (_bitMicros < 52) {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
-        } else if (_bitMicros < 65) {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ONE;
-        } else {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ZERO;
-        }
-    } else {
-        // lower part
-        if (_bitMicros < 52) {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
-        } else if (_bitMicros < 65) {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
-        } else {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
-        }
-    }
-
-    // wait till both halfes of the bit are set
-    if ((_buffer[_bufferWrite] & 0x0F) == 0 || (_buffer[_bufferWrite] & 0xF0) == 0) {
-        return;
-    }
-
-    _bufferWrite++;
-    if (_bufferWrite >= BUFFER_SIZE) {
-        _bufferWrite = 0;
-    }
-}
+void externalInterruptHandler();
 
 void setup() {
     Serial.begin(115200);
@@ -99,49 +94,128 @@ void setup() {
     Serial.print("DCC Quality Analyser V");
     Serial.println(VERSION);
 
-    Serial.println("Commands: b - line break, l - legend");
+    Serial.println("Commands: b - line break, l - legend, s - toggle smart bit separator");
 }
 
 void loop() {
-    if (Serial.available() > 0) {
-        char ch = Serial.read();
+    handleInput();
+    printBuffer();
+}
 
-        switch (ch) {
-            case 'b':
-                Serial.println();
-                _bitCounter = 0;
-                
+void handleInput() {
+    if (Serial.available() == 0) {
+        return;
+    }
+
+    auto ch = Serial.read();
+    switch (ch) {
+        case 'b':
+            Serial.println();
+            _bitCounter = 0;
+            
+            break;
+
+        case 'l':
+            Serial.println();
+            Serial.println("Legend:");
+            Serial.println("\t1: Valid bit, value = 1");
+            Serial.println("\t0: Valid bit, value = 0");
+            Serial.println("\te: Invalid bit, first half 1, second half 0");
+            Serial.println("\tE: Invalid bit, first half 0, second half 1");
+            Serial.println("\tf: Invalid bit, first half invalid, second half 1");
+            Serial.println("\tF: Invalid bit, first half invalid, second half 0");
+            Serial.println("\ts: Invalid bit, first half 1, second half invalid");
+            Serial.println("\tS: Invalid bit, first half 0, second half invalid");
+            Serial.println("\tb: Invalid bit, first half invalid, second half invalid");
+            Serial.println("\tu: Unknown state");
+
+            break;
+
+        case 's':
+            _smartBitSeparator = !_smartBitSeparator;
+
+            break;
+
+        case '\n':
+        case '\r':
+            break;
+
+        default:
+            Serial.println("\nUnknown command");
+            
+            break;
+    }
+}
+
+void printBuffer() {
+    uint8_t oldPacketState;
+
+    while (_bufferRead != _bufferWrite) {
+        // update packet state
+        oldPacketState = _packetState;
+
+        switch (_packetState) {
+            case PACKET_STATE_UNKNOWN:
+                if (IS_ONE_BIT(_bufferRead)) {
+                    _packetPreambleCount = 0;
+
+                    _packetState = PACKET_STATE_PREAMBLE;
+                }
+
                 break;
 
-            case 'l':
-                Serial.println("Legend:");
-                Serial.println("\t1: Valid bit, value = 1");
-                Serial.println("\t0: Valid bit, value = 0");
-                Serial.println("\te: Invalid bit, first half 1, second half 0");
-                Serial.println("\tE: Invalid bit, first half 0, second half 1");
-                Serial.println("\tf: Invalid bit, first half invalid, second half 1");
-                Serial.println("\tF: Invalid bit, first half invalid, second half 0");
-                Serial.println("\ts: Invalid bit, first half 1, second half invalid");
-                Serial.println("\tS: Invalid bit, first half 0, second half invalid");
-                Serial.println("\tb: Invalid bit, first half invalid, second half invalid");
-                Serial.println("\tu: Unknown state");
+            case PACKET_STATE_PREAMBLE:
+                if (IS_ZERO_BIT(_bufferRead) && _packetPreambleCount >= MIN_PREAMBLE_COUNT) {
+                    _packetState = PACKET_STATE_DATA_SEPARATOR;
+                } else {
+                    _packetPreambleCount++;
+                }
 
                 break;
 
-            case '\n':
-            case '\r':
+            case PACKET_STATE_DATA_SEPARATOR:
+                _packetState = PACKET_STATE_DATA;
+
                 break;
 
-            default:
-                Serial.println("\nUnknown command");
+            case PACKET_STATE_DATA:
+                if (_packetDataBitCount >= 7) {
+                    _packetDataBitCount = 0;
+
+                    if (IS_ZERO_BIT(_bufferRead)) {
+                        _packetState = PACKET_STATE_DATA_SEPARATOR;
+                    } else if (IS_ONE_BIT(_bufferRead)) {
+                        _packetState = PACKET_STATE_END;
+                    } else {
+                        _packetState = PACKET_STATE_UNKNOWN;
+                    }
+                } else {
+                    _packetDataBitCount++;
+                }
+
+                break;
+
+            case PACKET_STATE_END:
+                _packetPreambleCount = 0;
+
+                if (IS_ONE_BIT(_bufferRead)) {
+                    _packetState = PACKET_STATE_PREAMBLE;
+                } else {
+                    _packetState = PACKET_STATE_UNKNOWN;
+                }
+
                 break;
         }
-    }
-  
-    while (_bufferRead != _bufferWrite) {
-        uint8_t val = _buffer[_bufferRead];
 
-        switch (val) {
+        // print bit representation
+        if (_smartBitSeparator) {
+            if ((oldPacketState == PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_DATA_SEPARATOR) ||
+                    (oldPacketState == PACKET_STATE_DATA && (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END))) {
+                Serial.print(" ");
+            }
+        }
+
+        switch (_buffer[_bufferRead]) {
             case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE:
                 Serial.print("1");
                 break;
@@ -184,14 +258,23 @@ void loop() {
                 break;
         }
 
-        _buffer[_bufferRead] = 0;
-
+        // handle spaces and line breaks
         _bitCounter++;
-        if (_bitCounter >= 8) {
-            _bitCounter = 0;
-  
-            Serial.print(" ");
+
+        if (_smartBitSeparator) {
+            if (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END) {
+                Serial.print(" ");
+            }
+        } else {
+            if (_bitCounter >= 8) {
+                _bitCounter = 0;
+      
+                Serial.print(" ");
+            }
         }
+
+        // advance buffer
+        _buffer[_bufferRead] = 0;
 
         _bufferRead++;
         if (_bufferRead >= BUFFER_SIZE) {
@@ -199,3 +282,43 @@ void loop() {
         }
     }
 }
+
+void externalInterruptHandler() {
+    auto _actualMicros = micros();
+    auto _bitMicros = _actualMicros - _lastMicros;
+
+    _lastMicros = _actualMicros;
+
+    auto val = digitalRead(DCC_PIN);
+    if (val == HIGH) {
+        // upper part
+        if (_bitMicros < 52) {
+            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
+        } else if (_bitMicros < 65) {
+            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ONE;
+        } else {
+            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ZERO;
+        }
+    } else {
+        // lower part
+        if (_bitMicros < 52) {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
+        } else if (_bitMicros < 65) {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
+        } else {
+            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
+        }
+    }
+
+    // wait till both halves of the bit are set
+    if ((_buffer[_bufferWrite] & 0x0F) == 0 || (_buffer[_bufferWrite] & 0xF0) == 0) {
+        return;
+    }
+
+    // advance buffer
+    _bufferWrite++;
+    if (_bufferWrite >= BUFFER_SIZE) {
+        _bufferWrite = 0;
+    }
+}
+
