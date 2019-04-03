@@ -181,7 +181,9 @@ void handleInput() {
             Serial.print(", total errors: ");
             Serial.print(_totalErrors);
             Serial.print(", error packet rate: ");
-            Serial.println((float) _errorPackets / (float) _totalPackets);
+            Serial.print((float) _errorPackets / (float) _totalPackets);
+            Serial.print(", errors per packet rate: ");
+            Serial.println((float) _totalErrors / (float) _totalPackets);
 
             break;
 
