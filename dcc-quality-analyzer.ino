@@ -80,8 +80,6 @@ static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
 static bool _errorInterrupt = false;
 
-static unsigned long _lastUpdatePrint = 0;
-
 ////////////////////////////////////////
 // Functions
 ////////////////////////////////////////
@@ -109,6 +107,7 @@ void setup() {
     Serial.println(VERSION);
 
     Serial.println("Commands: b - toggle bit stream, l - legend, s - toggle smart bit separator, S - toggle smart line break");
+    Serial.println("\te - toggle error interrupt pin, i - get packets info, r - reset packets info");
 }
 
 void loop() {
@@ -164,6 +163,25 @@ void handleInput() {
             _errorInterrupt = !_errorInterrupt;
 
             PRINT_TOGGLE_STATE(_errorInterrupt, "Error interrupt");
+
+            break;
+
+        case 'r':
+            _totalPackets = 0;
+            _totalErrors = 0;
+            _errorPackets = 0;
+
+            Serial.println("\nReset packets info");
+
+            break;
+
+        case 'i':
+            Serial.print("Total packets: ");
+            Serial.print(_totalPackets);
+            Serial.print(", total errors: ");
+            Serial.print(_totalErrors);
+            Serial.print(", error packet rate: ");
+            Serial.println((float) _errorPackets / (float) _totalPackets);
 
             break;
 
@@ -349,26 +367,6 @@ void printBuffer() {
             _bufferRead = 0;
         }
     }
-
-    auto now = millis();
-    if (_lastUpdatePrint == 0) {
-        _lastUpdatePrint = now;
-
-        return;
-    }
-
-    if (now - _lastUpdatePrint < 1000) {
-        return;
-    }
-
-    Serial.print("Total packets: ");
-    Serial.print(_totalPackets);
-    Serial.print(", total errors: ");
-    Serial.print(_totalErrors);
-    Serial.print(", error packet rate: ");
-    Serial.println((float) _errorPackets / (float) _totalPackets);
-
-    _lastUpdatePrint = now;
 }
 
 void externalInterruptHandler() {
