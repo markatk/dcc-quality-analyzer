@@ -31,6 +31,7 @@
 ////////////////////////////////////////
 
 #define DCC_PIN 2
+#define ERR_INT_PIN 4
 
 ////////////////////////////////////////
 // Global variables and definitions
@@ -77,6 +78,7 @@ static uint32_t _totalErrors = 0;
 static bool _printBitStream = false;
 static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
+static bool _errorInterrupt = false;
 
 static unsigned long _lastUpdatePrint = 0;
 
@@ -93,6 +95,9 @@ void setup() {
     Serial.begin(115200);
 
     pinMode(DCC_PIN, INPUT);
+    pinMode(ERR_INT_PIN, 4);
+
+    digitalWrite(ERR_INT_PIN, LOW);
 
     attachInterrupt(digitalPinToInterrupt(DCC_PIN), externalInterruptHandler, CHANGE);
 
@@ -152,6 +157,13 @@ void handleInput() {
             _smartLineBreak = !_smartLineBreak;
 
             PRINT_TOGGLE_STATE(_smartLineBreak, "Smart line break");
+
+            break;
+
+        case 'e':
+            _errorInterrupt = !_errorInterrupt;
+
+            PRINT_TOGGLE_STATE(_errorInterrupt, "Error interrupt");
 
             break;
 
@@ -295,6 +307,12 @@ void updatePacketState() {
 
     if (IS_ZERO_BIT(_bufferRead) == false && IS_ONE_BIT(_bufferRead) == false) {
         _packetErrors++;
+
+        if (_errorInterrupt) {
+            digitalWrite(ERR_INT_PIN, HIGH);
+            delay(1);
+            digitalWrite(ERR_INT_PIN, LOW);
+        }
     }
 }
 
