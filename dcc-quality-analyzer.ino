@@ -32,6 +32,7 @@
 
 #define DCC_PIN 2
 #define ERR_INT_PIN 4
+#define PACKET_INT_PIN 5
 
 ////////////////////////////////////////
 // Global variables and definitions
@@ -79,6 +80,7 @@ static bool _printBitStream = false;
 static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
 static bool _errorInterrupt = false;
+static bool _packetInterrupt = false;
 
 ////////////////////////////////////////
 // Functions
@@ -93,9 +95,11 @@ void setup() {
     Serial.begin(115200);
 
     pinMode(DCC_PIN, INPUT);
-    pinMode(ERR_INT_PIN, 4);
+    pinMode(ERR_INT_PIN, OUTPUT);
+    pinMode(PACKET_INT_PIN, OUTPUT);
 
     digitalWrite(ERR_INT_PIN, LOW);
+    digitalWrite(PACKET_INT_PIN, LOW);
 
     attachInterrupt(digitalPinToInterrupt(DCC_PIN), externalInterruptHandler, CHANGE);
 
@@ -107,7 +111,7 @@ void setup() {
     Serial.println(VERSION);
 
     Serial.println("Commands: b - toggle bit stream, l - legend, s - toggle smart bit separator, S - toggle smart line break");
-    Serial.println("\te - toggle error interrupt pin, i - get packets info, r - reset packets info");
+    Serial.println("\te - toggle error interrupt pin, p - toggle packet interrupt pin, i - get packets info, r - reset packets info");
 }
 
 void loop() {
@@ -166,10 +170,25 @@ void handleInput() {
 
             break;
 
+        case 'p':
+            _packetInterrupt = !_packetInterrupt;
+
+            PRINT_TOGGLE_STATE(_packetInterrupt, "Packet interrupt");
+
+            break;
+
         case 'r':
             _totalPackets = 0;
             _totalErrors = 0;
             _errorPackets = 0;
+            
+            _bitCounter = 0;
+            _packetState = PACKET_STATE_UNKNOWN;
+            _packetPreambleCount = 0;
+            _packetDataBitCount = 0;
+
+            digitalWrite(PACKET_INT_PIN, LOW);
+            digitalWrite(ERR_INT_PIN, LOW);
 
             Serial.println("\nReset packets info");
 
@@ -345,7 +364,9 @@ void printBuffer() {
 
         updatePacketState();
 
-        if (_packetState == PACKET_STATE_END) {
+        if (_packetInterrupt && oldPacketState != PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_PREAMBLE) {
+            digitalWrite(PACKET_INT_PIN, HIGH);
+        } else if (_packetState == PACKET_STATE_END) {
             _totalPackets++;
 
             if (_packetErrors > 0) {
@@ -354,6 +375,10 @@ void printBuffer() {
             }
 
             _packetErrors = 0;
+
+            if (_packetInterrupt) {
+                digitalWrite(PACKET_INT_PIN, LOW);
+            }
         }
 
         // print bit representation
