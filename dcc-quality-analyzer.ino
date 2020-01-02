@@ -38,6 +38,11 @@
 // Global variables and definitions
 ////////////////////////////////////////
 
+#define MAX_ONE_BIT_TIME 146
+#define MAX_ONE_BIT_HALF 82
+#define MIN_ONE_BIT_TIME 82
+#define MIN_ONE_BIT_HALF 35
+
 #define BIT_STATE_FIRST_HALF_ONE 0x01
 #define BIT_STATE_FIRST_HALF_ZERO 0x03
 #define BIT_STATE_FIRST_HALF_FAILURE 0x02
@@ -238,38 +243,38 @@ void printBit(uint8_t oldPacketState) {
             Serial.print("0");
             break;
 
-        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ZERO:
-            Serial.print("e");
-            break;
-
-        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ONE:
-            Serial.print("E");
-            break;
-
-        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ONE:
-            Serial.print("f");
-            break;
-
-        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ZERO:
-            Serial.print("F");
-            break;
-
-        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_FAILURE:
-            Serial.print("s");
-            break;
-
-        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_FAILURE:
-            Serial.print("S");
-            break;
-
-        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_FAILURE:
-            Serial.print("b");
-            break;
-
-        default:
-            Serial.print("u");
-            Serial.print(_buffer[_bufferRead], HEX);
-            break;
+//        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ZERO:
+//            Serial.print("e");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ONE:
+//            Serial.print("E");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ONE:
+//            Serial.print("f");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ZERO:
+//            Serial.print("F");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_FAILURE:
+//            Serial.print("s");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_FAILURE:
+//            Serial.print("S");
+//            break;
+//
+//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_FAILURE:
+//            Serial.print("b");
+//            break;
+//
+//        default:
+//            Serial.print("u");
+//            Serial.print(_buffer[_bufferRead], HEX);
+//            break;
     }
 
     // handle spaces and line breaks
@@ -397,40 +402,46 @@ void printBuffer() {
 }
 
 void externalInterruptHandler() {
-    auto _actualMicros = micros();
+    auto actualMicros = micros();
 
     // if first change, discard data since timing did not start yet
     if (_lastMicros == 0) {
-        _lastMicros = _actualMicros;
+        _lastMicros = actualMicros;
 
         return;
     }
 
-    auto _bitMicros = _actualMicros - _lastMicros;
-    _lastMicros = _actualMicros;
+    auto bitMicros = actualMicros - _lastMicros;
 
-    if (_bitMicros > 9999) {
+    if (bitMicros > 9999) {
         // reset packet
         _packetState = PACKET_STATE_UNKNOWN;
         _buffer[_bufferWrite] = 0;
+        _lastMicros = actualMicros;
 
         return;
     }
 
+    if (bitMicros < MIN_ONE_BIT_HALF) {
+        return;
+    }
+
+    _lastMicros = actualMicros;
+
     if ((_buffer[_bufferWrite] & 0x0F) == 0) {
         // upper part
-        if (_bitMicros < 52) {
+        if (bitMicros < MIN_ONE_BIT_HALF) {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
-        } else if (_bitMicros < 65) {
+        } else if (bitMicros < MAX_ONE_BIT_HALF) {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ONE;
         } else {
             _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ZERO;
         }
     } else {
         // lower part
-        if (_bitMicros < 52) {
+        if (bitMicros < MIN_ONE_BIT_HALF) {
             _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
-        } else if (_bitMicros < 65) {
+        } else if (bitMicros < MAX_ONE_BIT_HALF) {
             _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
         } else {
             _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
