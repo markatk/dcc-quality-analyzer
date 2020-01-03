@@ -43,27 +43,28 @@
 #define MIN_ONE_BIT_TIME 82
 #define MIN_ONE_BIT_HALF 35
 
-#define BIT_STATE_FIRST_HALF_ONE 0x01
-#define BIT_STATE_FIRST_HALF_ZERO 0x03
-#define BIT_STATE_FIRST_HALF_FAILURE 0x02
-#define BIT_STATE_SECOND_HALF_ONE 0x10
-#define BIT_STATE_SECOND_HALF_ZERO 0x30
-#define BIT_STATE_SECOND_HALF_FAILURE 0x20
+#define BIT_HALF_STATE_ONE 0x01
+#define BIT_HALF_STATE_ZERO 0x02
+#define BIT_HALF_STATE_FAILURE 0x04
 
 #define PACKET_STATE_UNKNOWN 0x00
 #define PACKET_STATE_PREAMBLE 0x01
-#define PACKET_STATE_DATA_SEPARATOR 0x02
-#define PACKET_STATE_DATA 0x03
-#define PACKET_STATE_END 0x04
+#define PACKET_STATE_SYNCHRONIZE 0x02
+#define PACKET_STATE_DATA_SEPARATOR 0x03
+#define PACKET_STATE_DATA 0x04
+#define PACKET_STATE_END 0x05
 
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 196
 #define MIN_PREAMBLE_COUNT 10
 #define VERSION "1.0"
 
-#define IS_ZERO_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO)
-#define IS_ONE_BIT(x) _buffer[x] == (BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE)
+#define BIT_SECOND_HALF_POS(x) x + 1 >= BUFFER_SIZE ? 0 : x + 1
+#define IS_ZERO_BIT(x) _buffer[x] == BIT_HALF_STATE_ZERO && _buffer[BIT_SECOND_HALF_POS(x)] == BIT_HALF_STATE_ZERO
+#define IS_ONE_BIT(x) _buffer[x] == BIT_HALF_STATE_ONE && _buffer[BIT_SECOND_HALF_POS(x)] == BIT_HALF_STATE_ONE
+#define IS_ERROR_BIT(x) _buffer[x] & (BIT_HALF_STATE_ONE | BIT_HALF_STATE_ZERO) == 0 || _buffer[BIT_SECOND_HALF_POS(x)] & (BIT_HALF_STATE_ONE | BIT_HALF_STATE_ZERO) == 0
 
 #define PRINT_TOGGLE_STATE(x, y) Serial.println(x ? "\n" y " ON" : "\n" y " OFF")
+#define PRINT_BIT_STATE(y, a, b, z) if (_buffer[_bufferRead] == a && _buffer[y] == b) { Serial.print(z); return; }
 
 static volatile uint8_t _buffer[BUFFER_SIZE] = {0};
 static volatile uint8_t _bufferRead = 0;
@@ -81,7 +82,7 @@ static uint32_t _totalPackets = 0;
 static uint32_t _errorPackets = 0;
 static uint32_t _totalErrors = 0;
 
-static bool _printBitStream = false;
+static bool _printBitStream = true;
 static bool _smartBitSeparator = true;
 static bool _smartLineBreak = true;
 static bool _errorInterrupt = false;
@@ -93,7 +94,7 @@ static bool _packetInterrupt = false;
 
 void handleInput();
 void printBuffer();
-
+uint8_t getReadLength();
 void externalInterruptHandler();
 
 void setup() {
@@ -222,6 +223,24 @@ void handleInput() {
     }
 }
 
+void printBitState() {
+    uint8_t secondHalfPos = BIT_SECOND_HALF_POS(_bufferRead);
+    
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ONE, BIT_HALF_STATE_ONE, "1");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ZERO, BIT_HALF_STATE_ZERO, "0");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ONE, BIT_HALF_STATE_ZERO, "e");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ZERO, BIT_HALF_STATE_ONE, "E");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_FAILURE, BIT_HALF_STATE_ONE, "f");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_FAILURE, BIT_HALF_STATE_ZERO, "F");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ONE, BIT_HALF_STATE_FAILURE, "s");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_ZERO, BIT_HALF_STATE_FAILURE, "S");
+    PRINT_BIT_STATE(secondHalfPos, BIT_HALF_STATE_FAILURE, BIT_HALF_STATE_FAILURE, "b");
+
+    Serial.print("u");
+    Serial.print(_buffer[_bufferRead], HEX);
+    Serial.print(_buffer[secondHalfPos], HEX);
+}
+
 void printBit(uint8_t oldPacketState) {
     if (_printBitStream == false) {
         return;
@@ -234,48 +253,7 @@ void printBit(uint8_t oldPacketState) {
         }
     }
 
-    switch (_buffer[_bufferRead]) {
-        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ONE:
-            Serial.print("1");
-            break;
-
-        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ZERO:
-            Serial.print("0");
-            break;
-
-//        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_ZERO:
-//            Serial.print("e");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_ONE:
-//            Serial.print("E");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ONE:
-//            Serial.print("f");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_ZERO:
-//            Serial.print("F");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_ONE | BIT_STATE_SECOND_HALF_FAILURE:
-//            Serial.print("s");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_ZERO | BIT_STATE_SECOND_HALF_FAILURE:
-//            Serial.print("S");
-//            break;
-//
-//        case BIT_STATE_FIRST_HALF_FAILURE | BIT_STATE_SECOND_HALF_FAILURE:
-//            Serial.print("b");
-//            break;
-//
-//        default:
-//            Serial.print("u");
-//            Serial.print(_buffer[_bufferRead], HEX);
-//            break;
-    }
+    printBitState();
 
     // handle spaces and line breaks
     if (_smartBitSeparator) {
@@ -349,7 +327,7 @@ void updatePacketState() {
             break;
     }
 
-    if (IS_ZERO_BIT(_bufferRead) == false && IS_ONE_BIT(_bufferRead) == false) {
+    if (IS_ERROR_BIT(_bufferRead)) {
         _packetErrors++;
 
         if (_errorInterrupt) {
@@ -364,6 +342,10 @@ void printBuffer() {
     uint8_t oldPacketState;
 
     while (_bufferRead != _bufferWrite) {
+        if (getReadLength() < 2) {
+            break;
+        }
+        
         // update packet state
         oldPacketState = _packetState;
 
@@ -392,12 +374,23 @@ void printBuffer() {
         printBit(oldPacketState);
 
         // advance buffer
+        uint8_t secondHalfPos = BIT_SECOND_HALF_POS(_bufferRead);
+        
         _buffer[_bufferRead] = 0;
+        _buffer[secondHalfPos] = 0;
 
-        _bufferRead++;
+        _bufferRead += 2;
         if (_bufferRead >= BUFFER_SIZE) {
-            _bufferRead = 0;
+            _bufferRead -= BUFFER_SIZE;
         }
+    }
+}
+
+uint8_t getReadLength() {
+    if (_bufferWrite >= _bufferRead) {
+        return _bufferWrite - _bufferRead;
+    } else {
+        return BUFFER_SIZE + _bufferWrite - _bufferRead;
     }
 }
 
@@ -422,39 +415,19 @@ void externalInterruptHandler() {
         return;
     }
 
-    if (bitMicros < MIN_ONE_BIT_HALF) {
-        return;
-    }
-
     _lastMicros = actualMicros;
 
-    if ((_buffer[_bufferWrite] & 0x0F) == 0) {
-        // upper part
-        if (bitMicros < MIN_ONE_BIT_HALF) {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_FAILURE;
-        } else if (bitMicros < MAX_ONE_BIT_HALF) {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ONE;
-        } else {
-            _buffer[_bufferWrite] |= BIT_STATE_FIRST_HALF_ZERO;
-        }
+    if (bitMicros < MIN_ONE_BIT_HALF) {
+        _buffer[_bufferWrite] |= BIT_HALF_STATE_FAILURE;
+    } else if (bitMicros < MAX_ONE_BIT_HALF) {
+        _buffer[_bufferWrite] |= BIT_HALF_STATE_ONE;
     } else {
-        // lower part
-        if (bitMicros < MIN_ONE_BIT_HALF) {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_FAILURE;
-        } else if (bitMicros < MAX_ONE_BIT_HALF) {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ONE;
-        } else {
-            _buffer[_bufferWrite] |= BIT_STATE_SECOND_HALF_ZERO;
-        }
-    }
-
-    // wait till both halves of the bit are set
-    if ((_buffer[_bufferWrite] & 0x0F) == 0 || (_buffer[_bufferWrite] & 0xF0) == 0) {
-        return;
+        _buffer[_bufferWrite] |= BIT_HALF_STATE_ZERO;
     }
 
     // advance buffer
     _bufferWrite++;
+    
     if (_bufferWrite >= BUFFER_SIZE) {
         _bufferWrite = 0;
     }
