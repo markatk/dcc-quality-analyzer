@@ -273,25 +273,54 @@ void printBit(uint8_t oldPacketState) {
     }
 }
 
-void updatePacketState() {
+bool updatePacketState() {
     switch (_packetState) {
         case PACKET_STATE_UNKNOWN:
             if (IS_ONE_BIT(_bufferRead)) {
-                _packetPreambleCount = 0;
-
+                _packetPreambleCount = 1;
                 _packetState = PACKET_STATE_PREAMBLE;
             }
 
             break;
 
         case PACKET_STATE_PREAMBLE:
-            if (IS_ZERO_BIT(_bufferRead) && _packetPreambleCount >= MIN_PREAMBLE_COUNT) {
-                _packetState = PACKET_STATE_DATA_SEPARATOR;
-            } else {
+            if (IS_ONE_BIT(_bufferRead)) {
                 _packetPreambleCount++;
+
+                if (_packetPreambleCount >= MIN_PREAMBLE_COUNT) {
+                    _packetState = PACKET_STATE_SYNCHRONIZE;
+                }
+            } else {
+                _packetState = PACKET_STATE_UNKNOWN;
             }
 
             break;
+
+        case PACKET_STATE_SYNCHRONIZE:
+        {
+            uint8_t secondHalfPos = BIT_SECOND_HALF_POS(_bufferRead);
+            
+            if (_buffer[_bufferRead] == BIT_HALF_STATE_ZERO) {
+                if (_buffer[secondHalfPos] == BIT_HALF_STATE_ZERO) {
+                    _packetState = PACKET_STATE_DATA;
+                } else {
+                    _packetState = PACKET_STATE_UNKNOWN;
+                }
+            } else if (_buffer[_bufferRead] == BIT_HALF_STATE_ONE) {
+                if (_buffer[secondHalfPos] == BIT_HALF_STATE_ZERO) {
+                    // shift one bit half to try to correct synchronization
+                    _bufferRead++;
+
+                    return false;
+                } else if (_buffer[secondHalfPos] != BIT_HALF_STATE_ONE) {
+                    _packetState = PACKET_STATE_UNKNOWN;
+                }
+            } else {
+                _packetState = PACKET_STATE_UNKNOWN;
+            }
+
+            break;
+        }
 
         case PACKET_STATE_DATA_SEPARATOR:
             _packetState = PACKET_STATE_DATA;
@@ -336,6 +365,8 @@ void updatePacketState() {
             digitalWrite(ERR_INT_PIN, LOW);
         }
     }
+
+    return true;
 }
 
 void printBuffer() {
@@ -349,7 +380,9 @@ void printBuffer() {
         // update packet state
         oldPacketState = _packetState;
 
-        updatePacketState();
+        if (updatePacketState() == false) {
+            continue;
+        }
 
         if (_packetInterrupt && oldPacketState != PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_PREAMBLE) {
             digitalWrite(PACKET_INT_PIN, HIGH);
