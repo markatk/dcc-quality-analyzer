@@ -50,9 +50,8 @@
 #define PACKET_STATE_UNKNOWN 0x00
 #define PACKET_STATE_PREAMBLE 0x01
 #define PACKET_STATE_SYNCHRONIZE 0x02
-#define PACKET_STATE_DATA_SEPARATOR 0x03
+#define PACKET_STATE_SEPARATOR 0x03
 #define PACKET_STATE_DATA 0x04
-#define PACKET_STATE_END 0x05
 
 #define BUFFER_SIZE 196
 #define MIN_PREAMBLE_COUNT 10
@@ -247,8 +246,7 @@ void printBit(uint8_t oldPacketState) {
     }
 
     if (_smartBitSeparator) {
-        if ((oldPacketState == PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_DATA_SEPARATOR) ||
-            (oldPacketState == PACKET_STATE_DATA && (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END))) {
+        if (oldPacketState == PACKET_STATE_SYNCHRONIZE && _packetState == PACKET_STATE_DATA) {
             Serial.print(" ");
         }
     }
@@ -257,7 +255,7 @@ void printBit(uint8_t oldPacketState) {
 
     // handle spaces and line breaks
     if (_smartBitSeparator) {
-        if (_packetState == PACKET_STATE_DATA_SEPARATOR || _packetState == PACKET_STATE_END) {
+        if (_packetState == PACKET_STATE_SEPARATOR || (oldPacketState == PACKET_STATE_SEPARATOR && _packetState == PACKET_STATE_DATA) || (oldPacketState == PACKET_STATE_SYNCHRONIZE && _packetState == PACKET_STATE_DATA)) {
             Serial.print(" ");
         }
     } else {
@@ -268,7 +266,7 @@ void printBit(uint8_t oldPacketState) {
         }
     }
 
-    if (_smartLineBreak && _packetState == PACKET_STATE_END) {
+    if (oldPacketState == PACKET_STATE_SEPARATOR && _packetState == PACKET_STATE_PREAMBLE) {
         Serial.println();
     }
 }
@@ -303,6 +301,8 @@ bool updatePacketState() {
             if (_buffer[_bufferRead] == BIT_HALF_STATE_ZERO) {
                 if (_buffer[secondHalfPos] == BIT_HALF_STATE_ZERO) {
                     _packetState = PACKET_STATE_DATA;
+                    _packetDataBitCount = 0;
+                    
                 } else {
                     _packetState = PACKET_STATE_UNKNOWN;
                 }
@@ -322,35 +322,23 @@ bool updatePacketState() {
             break;
         }
 
-        case PACKET_STATE_DATA_SEPARATOR:
-            _packetState = PACKET_STATE_DATA;
-
-            break;
-
-        case PACKET_STATE_DATA:
-            if (_packetDataBitCount >= 7) {
+        case PACKET_STATE_SEPARATOR:
+            if (IS_ZERO_BIT(_bufferRead)) {
+                _packetState = PACKET_STATE_DATA;
                 _packetDataBitCount = 0;
-
-                if (IS_ZERO_BIT(_bufferRead)) {
-                    _packetState = PACKET_STATE_DATA_SEPARATOR;
-                } else if (IS_ONE_BIT(_bufferRead)) {
-                    _packetState = PACKET_STATE_END;
-                } else {
-                    _packetState = PACKET_STATE_UNKNOWN;
-                }
+            } else if (IS_ONE_BIT(_bufferRead)) {
+                _packetState = PACKET_STATE_PREAMBLE;
+                _packetPreambleCount = 0;
             } else {
-                _packetDataBitCount++;
+                _packetState = PACKET_STATE_UNKNOWN;
             }
 
             break;
 
-        case PACKET_STATE_END:
-            _packetPreambleCount = 0;
-
-            if (IS_ONE_BIT(_bufferRead)) {
-                _packetState = PACKET_STATE_PREAMBLE;
-            } else {
-                _packetState = PACKET_STATE_UNKNOWN;
+        case PACKET_STATE_DATA:
+            _packetDataBitCount++;
+            if (_packetDataBitCount >= 8) {
+                _packetState = PACKET_STATE_SEPARATOR;
             }
 
             break;
@@ -386,7 +374,7 @@ void printBuffer() {
 
         if (_packetInterrupt && oldPacketState != PACKET_STATE_PREAMBLE && _packetState == PACKET_STATE_PREAMBLE) {
             digitalWrite(PACKET_INT_PIN, HIGH);
-        } else if (_packetState == PACKET_STATE_END) {
+        } else if (oldPacketState == PACKET_STATE_SEPARATOR && _packetState == PACKET_STATE_PREAMBLE) {
             _totalPackets++;
 
             if (_packetErrors > 0) {
