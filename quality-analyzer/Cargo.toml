@@ -1,0 +1,16 @@
+[package]
+name = "quality-analyzer"
+version = "0.1.0"
+description = "DCC quality analyzer terminal application"
+authors = ["MarkAtk"]
+edition = "2018"
+license = "MIT"
+repository = "https://github.com/markatk/dcc-quality-analyzer"
+readme = "../README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serial-unit-testing = { version = "0.2.2", default-features = false }
+tui = { version = "0.8.0", default-features = false, features = ["crossterm"] }
+clap = "2.33.0"

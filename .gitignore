@@ -1,4 +1,7 @@
 # IDEs
 .idea/
+.vscode/
 
-.DS_Store
+# Rust
+**/target
+**/*.rs.bk
