@@ -24,6 +24,97 @@
  * SOFTWARE.
  */
 
+#[macro_use]
+extern crate clap;
+
+use std::error::Error as StdError;
+use std::time::Duration;
+use clap::{App, Arg};
+use serial_unit_testing::serial::*;
+
+mod error;
+use error::*;
+
 fn main() {
-    println!("Hello world");
+    let matches = App::new("dcc-quality-analyzer")
+        .version(crate_version!())
+        .version_short("v")
+        .about(crate_description!())
+        .arg(Arg::with_name("port")
+            .help("Serial port OS specific name")
+            .required(true)
+            .takes_value(true))
+        .get_matches();
+
+    // open serial port
+    let mut _serial = match connect_to_analyzer(matches.value_of("port").unwrap()) {
+        Ok(serial) => serial,
+        Err(err) => return eprintln!("Unable to connect to analyzer: {}", err.description())
+    };
+}
+
+fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
+    let settings = settings::Settings {
+        baud_rate: 115200,
+        timeout: 3000,
+        ..Default::default()
+    };
+
+    let mut serial = Serial::open_with_settings(port_name, &settings)?;
+
+    // verify connection
+    let identifier = read_str_until(&mut serial, "\n")?;
+    if identifier.starts_with("DCC Quality Analyser V") == false {
+        return Err(Error::UnknownDevice);
+    }
+
+    let pos = identifier.find("V");
+    let version = if let Some(version_pos) = pos {
+        let end_pos = identifier.find("\n").unwrap();
+        &identifier[version_pos + 1..end_pos]
+    } else {
+        return Err(Error::UnknownDevice);
+    };
+
+    read_until_with_timeout(&mut serial, "Ready", Duration::from_millis(5000))?;
+
+    println!("Analyzer hardware found, Version {}", version);
+
+    Ok(serial)
+}
+
+fn read_str_until(serial: &mut Serial, desired: &str) -> Result<String> {
+    let mut result = String::new();
+
+    loop {
+        match serial.read_str() {
+            Ok(chunk) => result += &chunk,
+            Err(ref err) if err.is_timeout() => return Err(Error::UnknownDevice),
+            Err(err) => return Err(Error::Serial(err))
+        }
+
+        if result.contains(desired) {
+            break;
+        }
+    }
+
+    Ok(result)
+}
+
+fn read_until_with_timeout(serial: &mut Serial, desired: &str, timeout: Duration) -> Result<String> {
+    let mut result = String::new();
+
+    loop {
+        match serial.read_str_with_timeout(timeout) {
+            Ok(chunk) => result += &chunk,
+            Err(ref err) if err.is_timeout() => return Err(Error::UnknownDevice),
+            Err(err) => return Err(Error::Serial(err))
+        }
+
+        if result.contains(desired) {
+            break;
+        }
+    }
+
+    Ok(result)
 }
