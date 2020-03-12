@@ -29,11 +29,41 @@ extern crate clap;
 
 use std::error::Error as StdError;
 use std::time::Duration;
+use std::io::{self, stdout, Write, Stdout};
 use clap::{App, Arg};
 use serial_unit_testing::serial::*;
+use tui::backend::CrosstermBackend;
+use crossterm::execute;
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode};
+use tui::Terminal;
+use tui::widgets::{Widget, Block, Borders, Paragraph, Text};
+use tui::layout::{Layout, Constraint, Direction};
+use tui::style::{Style, Modifier};
 
 mod error;
 use error::*;
+
+struct Data {
+    total_packets: u64,
+    invalid_packets: u64,
+    idle_packets: u64,
+    reset_packets: u64,
+    hardware: String,
+    firmware: String
+}
+
+impl Data {
+    pub fn new(hardware: &str, firmware: &str) -> Data {
+        Data {
+            total_packets: 0,
+            invalid_packets: 0,
+            idle_packets: 0,
+            reset_packets: 0,
+            hardware: hardware.to_string(),
+            firmware: firmware.to_string()
+        }
+    }
+}
 
 fn main() {
     let matches = App::new("dcc-quality-analyzer")
@@ -51,6 +81,114 @@ fn main() {
         Ok(serial) => serial,
         Err(err) => return eprintln!("Unable to connect to analyzer: {}", err.description())
     };
+
+    // create window
+    enable_raw_mode().expect("Unable to enter terminal raw mode");
+
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen).expect("Unable to enter terminal alternate screen");
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).expect("Unable to create the terminal");
+    terminal.hide_cursor().expect("Unable to hide cursor");
+
+    // start additional threads
+    {
+
+    }
+
+    // main loop
+    let mut data = Data::new("Arduino Uno V3", "1.0");
+
+    loop {
+        if let Err(err) = render(&mut terminal, &data) {
+            eprintln!("Error rendering window: {}", err.description());
+
+            break;
+        }
+
+        data.total_packets += 1;
+    }
+
+    // clean up terminal
+    disable_raw_mode().unwrap();
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
+    terminal.show_cursor().unwrap();
+}
+
+fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std::result::Result<(), io::Error> {
+    let total_packets = data.total_packets;
+    let valid_packets = data.total_packets - data.invalid_packets;
+    let invalid_packets = data.invalid_packets;
+    let idle_packets = data.idle_packets;
+    let reset_packets = data.reset_packets;
+
+    let hardware = data.hardware.as_str();
+    let firmware = data.firmware.as_str();
+
+    terminal.draw(|mut f| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Min(0),
+                Constraint::Length(4)
+            ].as_ref())
+            .split(f.size());
+
+        let statistics_text = vec![
+            Text::raw(format!("  Total packets: {}\nValid packets: {}", total_packets, valid_packets)),
+            Text::styled(format!(" ({}%)\n", valid_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::raw(format!("Invalid packets: {} ", invalid_packets)),
+            Text::styled(format!("({}%)\n", invalid_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::raw(format!("   Idle packets: {} ", idle_packets)),
+            Text::styled(format!("({}%)\n", idle_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::raw(format!(" Reset packets: {} ", reset_packets)),
+            Text::styled(format!("({}%)\n", reset_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC))
+        ];
+
+        let packets_text = vec![
+            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
+            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
+            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
+            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
+            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
+            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
+            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
+            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
+        ];
+
+        let hardware_text = vec![
+            Text::raw(format!("Hardware: {}\nFirmware: {}", hardware, firmware)),
+        ];
+
+        Paragraph::new(statistics_text.iter())
+            .block(
+                Block::default()
+                    .title("Statistics")
+                    .title_style(Style::default().modifier(Modifier::BOLD))
+                    .borders(Borders::ALL))
+            .wrap(true)
+            .render(&mut f, chunks[0]);
+
+        Paragraph::new(packets_text.iter())
+            .block(
+                Block::default()
+                    .title("Packets")
+                    .title_style(Style::default().modifier(Modifier::BOLD))
+                    .borders(Borders::ALL))
+            .wrap(false)
+            .render(&mut f, chunks[1]);
+
+        Paragraph::new(hardware_text.iter())
+            .block(
+                Block::default()
+                    .title("Hardware")
+                    .title_style(Style::default().modifier(Modifier::BOLD))
+                    .borders(Borders::ALL))
+            .wrap(false)
+            .render(&mut f, chunks[2]);
+    })
 }
 
 fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
@@ -69,7 +207,7 @@ fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
     }
 
     let pos = identifier.find("V");
-    let version = if let Some(version_pos) = pos {
+    let _firmware_version = if let Some(version_pos) = pos {
         let end_pos = identifier.find("\n").unwrap();
         &identifier[version_pos + 1..end_pos]
     } else {
@@ -77,8 +215,6 @@ fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
     };
 
     read_until_with_timeout(&mut serial, "Ready", Duration::from_millis(5000))?;
-
-    println!("Analyzer hardware found, Version {}", version);
 
     Ok(serial)
 }
