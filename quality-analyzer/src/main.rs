@@ -30,7 +30,7 @@ extern crate clap;
 use std::error::Error as StdError;
 use std::time::Duration;
 use std::io::{self, stdout, Write, Stdout};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc;
 use std::thread;
 use clap::{App, Arg};
 use serial_unit_testing::serial::*;
@@ -44,7 +44,9 @@ use tui::layout::{Layout, Constraint, Direction};
 use tui::style::{Style, Modifier};
 
 mod error;
+mod dcc;
 use error::*;
+use dcc::*;
 
 struct Data {
     total_packets: u64,
@@ -82,36 +84,6 @@ impl Data {
         };
 
         self.packets.push(packet);
-    }
-}
-
-enum DCCPacketType {
-    Unknown,
-    Invalid,
-    Idle,
-    Reset
-}
-
-struct DCCPacket {
-    raw: String,
-    packet_type: DCCPacketType,
-    description: String
-}
-
-impl DCCPacket {
-    pub fn new(raw: &str) -> DCCPacket {
-        DCCPacket {
-            packet_type: DCCPacketType::Unknown,
-            raw: raw.to_string(),
-            description: "Unknown".to_string()
-        }
-    }
-
-    pub fn to_text(&self) -> Vec<Text> {
-        vec![
-            Text::raw(&self.raw),
-            Text::styled(format!(" ({})\n", self.description), Style::default().modifier(Modifier::ITALIC))
-        ]
     }
 }
 
