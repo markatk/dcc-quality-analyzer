@@ -117,6 +117,8 @@ void setup() {
 
     Serial.println("Commands: b - toggle bit stream, l - legend, s - toggle smart bit separator, S - toggle smart line break");
     Serial.println("\te - toggle error interrupt pin, p - toggle packet interrupt pin, i - get packets info, r - reset packets info");
+
+    Serial.println("Ready");
 }
 
 void loop() {

@@ -30,11 +30,14 @@ extern crate clap;
 use std::error::Error as StdError;
 use std::time::Duration;
 use std::io::{self, stdout, Write, Stdout};
+use std::sync::mpsc::{self, Sender, Receiver};
+use std::thread;
 use clap::{App, Arg};
 use serial_unit_testing::serial::*;
 use tui::backend::CrosstermBackend;
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode, disable_raw_mode};
+use crossterm::event::{self, KeyEvent, KeyCode, KeyModifiers, read};
 use tui::Terminal;
 use tui::widgets::{Widget, Block, Borders, Paragraph, Text};
 use tui::layout::{Layout, Constraint, Direction};
@@ -49,7 +52,8 @@ struct Data {
     idle_packets: u64,
     reset_packets: u64,
     hardware: String,
-    firmware: String
+    firmware: String,
+    packets: Vec<DCCPacket>
 }
 
 impl Data {
@@ -60,9 +64,59 @@ impl Data {
             idle_packets: 0,
             reset_packets: 0,
             hardware: hardware.to_string(),
-            firmware: firmware.to_string()
+            firmware: firmware.to_string(),
+            packets: vec![]
         }
     }
+
+    pub fn add_packet(&mut self, raw: &str) {
+        let packet = DCCPacket::new(raw);
+
+        self.total_packets += 1;
+
+        match packet.packet_type {
+            DCCPacketType::Invalid => self.invalid_packets += 1,
+            DCCPacketType::Idle => self.idle_packets += 1,
+            DCCPacketType::Reset => self.reset_packets += 1,
+            _ => ()
+        };
+
+        self.packets.push(packet);
+    }
+}
+
+enum DCCPacketType {
+    Unknown,
+    Invalid,
+    Idle,
+    Reset
+}
+
+struct DCCPacket {
+    raw: String,
+    packet_type: DCCPacketType,
+    description: String
+}
+
+impl DCCPacket {
+    pub fn new(raw: &str) -> DCCPacket {
+        DCCPacket {
+            packet_type: DCCPacketType::Unknown,
+            raw: raw.to_string(),
+            description: "Unknown".to_string()
+        }
+    }
+
+    pub fn to_text(&self) -> Vec<Text> {
+        vec![
+            Text::raw(&self.raw),
+            Text::styled(format!(" ({})\n", self.description), Style::default().modifier(Modifier::ITALIC))
+        ]
+    }
+}
+
+enum Event {
+    Input(KeyEvent)
 }
 
 fn main() {
@@ -77,7 +131,7 @@ fn main() {
         .get_matches();
 
     // open serial port
-    let mut _serial = match connect_to_analyzer(matches.value_of("port").unwrap()) {
+    let (mut serial, firmware, hardware) = match connect_to_analyzer(matches.value_of("port").unwrap()) {
         Ok(serial) => serial,
         Err(err) => return eprintln!("Unable to connect to analyzer: {}", err.description())
     };
@@ -92,13 +146,38 @@ fn main() {
     let mut terminal = Terminal::new(backend).expect("Unable to create the terminal");
     terminal.hide_cursor().expect("Unable to hide cursor");
 
+    let (tx, rx) = mpsc::channel();
+
     // start additional threads
     {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            loop {
+                let event = match read() {
+                    Ok(event) => event,
+                    Err(err) => {
+                        println!("Error in input thread: {}", err);
 
+                        return;
+                    }
+                };
+
+                match event {
+                    event::Event::Key(key) => {
+                        if let Err(_) = tx.send(Event::Input(key.clone())) {
+                            return;
+                        }
+                    },
+                    _ => {}
+                }
+            }
+        });
     }
 
     // main loop
-    let mut data = Data::new("Arduino Uno V3", "1.0");
+    let mut data = Data::new(&hardware, &firmware);
+    data.add_packet("11111111111111 0 11111111 0 00000000 0 11111111 1");
+    data.add_packet("11111111111111 0 00000000 0 00000000 0 00000000 1");
 
     loop {
         if let Err(err) = render(&mut terminal, &data) {
@@ -107,13 +186,39 @@ fn main() {
             break;
         }
 
-        data.total_packets += 1;
+        match rx.recv() {
+            Ok(Event::Input(event)) => {
+                match event {
+                    KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::CONTROL } => {
+                        if c == 'c' {
+                            break;
+                        }
+                    },
+                    KeyEvent { code: KeyCode::Char(c), modifiers: _ } => {
+                        if c == 'q' {
+                            break;
+                        }
+                    },
+                    KeyEvent { code: KeyCode::Esc, modifiers: _ } => break,
+                    _ => ()
+                }
+            },
+            _ => ()
+        };
     }
 
     // clean up terminal
     disable_raw_mode().unwrap();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
+}
+
+fn get_packet_percentage(count: u64, total: u64, default: f32) -> f32 {
+    if total > 0 {
+        count as f32 / total as f32 * 100.0
+    } else {
+        default
+    }
 }
 
 fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std::result::Result<(), io::Error> {
@@ -125,6 +230,12 @@ fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std
 
     let hardware = data.hardware.as_str();
     let firmware = data.firmware.as_str();
+
+    let packets_text: Vec<Text> = data.packets
+        .iter()
+        .map(|packet| packet.to_text())
+        .flatten()
+        .collect();
 
     terminal.draw(|mut f| {
         let chunks = Layout::default()
@@ -138,24 +249,13 @@ fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std
 
         let statistics_text = vec![
             Text::raw(format!("  Total packets: {}\nValid packets: {}", total_packets, valid_packets)),
-            Text::styled(format!(" ({}%)\n", valid_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::styled(format!(" ({}%)\n", get_packet_percentage(valid_packets, total_packets, 100.0)), Style::default().modifier(Modifier::ITALIC)),
             Text::raw(format!("Invalid packets: {} ", invalid_packets)),
-            Text::styled(format!("({}%)\n", invalid_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::styled(format!("({}%)\n", get_packet_percentage(invalid_packets, total_packets, 0.0)), Style::default().modifier(Modifier::ITALIC)),
             Text::raw(format!("   Idle packets: {} ", idle_packets)),
-            Text::styled(format!("({}%)\n", idle_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC)),
+            Text::styled(format!("({}%)\n", get_packet_percentage(idle_packets, total_packets, 0.0)), Style::default().modifier(Modifier::ITALIC)),
             Text::raw(format!(" Reset packets: {} ", reset_packets)),
-            Text::styled(format!("({}%)\n", reset_packets as f32 / total_packets as f32 * 100.0), Style::default().modifier(Modifier::ITALIC))
-        ];
-
-        let packets_text = vec![
-            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
-            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
-            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
-            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
-            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
-            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
-            Text::raw("11111111111111 0 11111111 0 00000000 0 11111111 1"),
-            Text::styled(" (Idle packet)\n", Style::default().modifier(Modifier::ITALIC)),
+            Text::styled(format!("({}%)\n", get_packet_percentage(reset_packets, total_packets, 0.0)), Style::default().modifier(Modifier::ITALIC))
         ];
 
         let hardware_text = vec![
@@ -191,7 +291,7 @@ fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std
     })
 }
 
-fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
+fn connect_to_analyzer(port_name: &str) -> Result<(Serial, String, String)> {
     let settings = settings::Settings {
         baud_rate: 115200,
         timeout: 3000,
@@ -207,7 +307,7 @@ fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
     }
 
     let pos = identifier.find("V");
-    let _firmware_version = if let Some(version_pos) = pos {
+    let firmware_version = if let Some(version_pos) = pos {
         let end_pos = identifier.find("\n").unwrap();
         &identifier[version_pos + 1..end_pos]
     } else {
@@ -216,7 +316,7 @@ fn connect_to_analyzer(port_name: &str) -> Result<Serial> {
 
     read_until_with_timeout(&mut serial, "Ready", Duration::from_millis(5000))?;
 
-    Ok(serial)
+    Ok((serial, firmware_version.to_string(), "Arduino Uno V3".to_string()))
 }
 
 fn read_str_until(serial: &mut Serial, desired: &str) -> Result<String> {
