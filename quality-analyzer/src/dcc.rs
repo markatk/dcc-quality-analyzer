@@ -63,26 +63,20 @@ impl DCCPacket {
         // find binary data, start searching at the end
         let re = Regex::new(r"1{10,}\s0\s(?P<byte0>[01]{8})\s0\s(?P<byte1>[01]{8})\s0\s(?P<byte2>[01]{8})(\s0\s(?P<byte3>[01]{8}))?(\s0\s(?P<byte4>[01]{8}))?(\s0\s(?P<byte5>[01]{8}))?\s1").unwrap();
         let mut data: Vec<u8> = Vec::new();
+        let unknown_type = (DCCPacketType::Unknown, "Unknown packet".to_string());
 
         let captures = match re.captures(raw) {
             Some(cap) => cap,
-            None => return (DCCPacketType::Unknown, String::new())
+            None => return unknown_type
         };
 
-        data.push(DCCPacket::byte_string_to_u8(&captures["byte0"]));
-        data.push(DCCPacket::byte_string_to_u8(&captures["byte1"]));
-        data.push(DCCPacket::byte_string_to_u8(&captures["byte2"]));
+        for i in 0..6 {
+            let group = format!("byte{}", i);
 
-        // TODO: Improve nesting
-        if let Some(byte) = captures.name("byte3") {
-            data.push(DCCPacket::byte_string_to_u8(byte.as_str()));
-
-            if let Some(byte) = captures.name("byte4") {
+            if let Some(byte) = captures.name(&group) {
                 data.push(DCCPacket::byte_string_to_u8(byte.as_str()));
-
-                if let Some(byte) = captures.name("byte5") {
-                    data.push(DCCPacket::byte_string_to_u8(byte.as_str()));
-                }
+            } else {
+                break;
             }
         }
 
@@ -95,7 +89,7 @@ impl DCCPacket {
             return (DCCPacketType::Reset, "Reset packet".to_string());
         }
 
-        (DCCPacketType::Unknown, String::new())
+        return unknown_type;
     }
 
     fn byte_string_to_u8(str: &str) -> u8 {

@@ -77,13 +77,21 @@ impl Data {
         self.total_packets += 1;
 
         match packet.packet_type {
-            DCCPacketType::Invalid => self.invalid_packets += 1,
+            DCCPacketType::Invalid | DCCPacketType::Unknown => self.invalid_packets += 1,
             DCCPacketType::Idle => self.idle_packets += 1,
-            DCCPacketType::Reset => self.reset_packets += 1,
-            _ => ()
+            DCCPacketType::Reset => self.reset_packets += 1
         };
 
         self.packets.push(packet);
+    }
+
+    pub fn clear(&mut self) {
+        self.total_packets = 0;
+        self.invalid_packets = 0;
+        self.idle_packets = 0;
+        self.reset_packets = 0;
+
+        self.packets.clear();
     }
 }
 
@@ -114,10 +122,20 @@ fn main() {
     {
         let tx = tx.clone();
         thread::spawn(move || {
+            let mut remainder = String::new();
+
             loop {
                 match read_str_until(&mut serial, "\n") {
                     Ok(data) => {
-                        if let Err(_) = tx.send(Event::Output(data)) {
+                        let mut total_data = format!("{}{}", remainder, data);
+                        if let Some(newline_index) = total_data.find('\n') {
+                            remainder = total_data.split_off(newline_index);
+
+                            // remove newline character
+                            remainder.remove(0);
+                        }
+
+                        if let Err(_) = tx.send(Event::Output(total_data)) {
                             return eprintln!("Unable to send to ui thread");
                         }
                     },
@@ -183,6 +201,7 @@ fn main() {
             _ => break
         };
 
+        // get additional events in queue
         let result = loop {
             match rx.try_recv() {
                 Ok(event) => {
@@ -213,6 +232,7 @@ fn handle_event(event: Event, data: &mut Data) -> bool {
                 KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::CONTROL } if c == 'c' => return true,
                 KeyEvent { code: KeyCode::Char(c), modifiers: _ } if c == 'q' => return true,
                 KeyEvent { code: KeyCode::Esc, modifiers: _ } => return true,
+                KeyEvent { code: KeyCode::Char(c), modifiers: _ } if c == 'r' => data.clear(),
                 _ => ()
             }
         },
