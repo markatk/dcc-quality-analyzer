@@ -88,7 +88,8 @@ impl Data {
 }
 
 enum Event {
-    Input(KeyEvent)
+    Input(KeyEvent),
+    Output(String)
 }
 
 fn main() {
@@ -108,6 +109,29 @@ fn main() {
         Err(err) => return eprintln!("Unable to connect to analyzer: {}", err.description())
     };
 
+    let (tx, rx) = mpsc::channel();
+
+    {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            loop {
+                match read_str_until(&mut serial, "\n") {
+                    Ok(data) => {
+                        if let Err(_) = tx.send(Event::Output(data)) {
+                            return eprintln!("Unable to send to ui thread");
+                        }
+                    },
+                    Err(err) => {
+                        match err {
+                            Error::Serial(ref serial_error) if serial_error.is_timeout() => (),
+                            _ => return eprintln!("Unable to read from serial: {}", err)
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // create window
     enable_raw_mode().expect("Unable to enter terminal raw mode");
 
@@ -118,8 +142,6 @@ fn main() {
     let mut terminal = Terminal::new(backend).expect("Unable to create the terminal");
     terminal.hide_cursor().expect("Unable to hide cursor");
 
-    let (tx, rx) = mpsc::channel();
-
     // start additional threads
     {
         let tx = tx.clone();
@@ -127,11 +149,7 @@ fn main() {
             loop {
                 let event = match read() {
                     Ok(event) => event,
-                    Err(err) => {
-                        println!("Error in input thread: {}", err);
-
-                        return;
-                    }
+                    Err(err) => return println!("Error in input thread: {}", err)
                 };
 
                 match event {
@@ -140,7 +158,7 @@ fn main() {
                             return;
                         }
                     },
-                    _ => {}
+                    _ => ()
                 }
             }
         });
@@ -148,8 +166,6 @@ fn main() {
 
     // main loop
     let mut data = Data::new(&hardware, &firmware);
-    data.add_packet("11111111111111 0 11111111 0 00000000 0 11111111 1");
-    data.add_packet("11111111111111 0 00000000 0 00000000 0 00000000 1");
 
     loop {
         if let Err(err) = render(&mut terminal, &data) {
@@ -159,30 +175,53 @@ fn main() {
         }
 
         match rx.recv() {
-            Ok(Event::Input(event)) => {
-                match event {
-                    KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::CONTROL } => {
-                        if c == 'c' {
-                            break;
-                        }
-                    },
-                    KeyEvent { code: KeyCode::Char(c), modifiers: _ } => {
-                        if c == 'q' {
-                            break;
-                        }
-                    },
-                    KeyEvent { code: KeyCode::Esc, modifiers: _ } => break,
-                    _ => ()
+            Ok(event) => {
+                if handle_event(event, &mut data) {
+                    break;
                 }
             },
-            _ => ()
+            _ => break
         };
+
+        let result = loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    if handle_event(event, &mut data) {
+                        break true;
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => break false,
+                _ => break true
+            }
+        };
+
+        if result {
+            break;
+        }
     }
 
     // clean up terminal
     disable_raw_mode().unwrap();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
+}
+
+fn handle_event(event: Event, data: &mut Data) -> bool {
+    match event {
+        Event::Input(event) => {
+            match event {
+                KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::CONTROL } if c == 'c' => return true,
+                KeyEvent { code: KeyCode::Char(c), modifiers: _ } if c == 'q' => return true,
+                KeyEvent { code: KeyCode::Esc, modifiers: _ } => return true,
+                _ => ()
+            }
+        },
+        Event::Output(text) => {
+            data.add_packet(&text);
+        }
+    };
+
+    return false;
 }
 
 fn get_packet_percentage(count: u64, total: u64, default: f32) -> f32 {
@@ -297,7 +336,6 @@ fn read_str_until(serial: &mut Serial, desired: &str) -> Result<String> {
     loop {
         match serial.read_str() {
             Ok(chunk) => result += &chunk,
-            Err(ref err) if err.is_timeout() => return Err(Error::UnknownDevice),
             Err(err) => return Err(Error::Serial(err))
         }
 
