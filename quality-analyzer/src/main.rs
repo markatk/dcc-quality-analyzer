@@ -79,7 +79,8 @@ impl Data {
         match packet.packet_type {
             DCCPacketType::Invalid | DCCPacketType::Unknown => self.invalid_packets += 1,
             DCCPacketType::Idle => self.idle_packets += 1,
-            DCCPacketType::Reset => self.reset_packets += 1
+            DCCPacketType::Reset => self.reset_packets += 1,
+            _ => ()
         };
 
         self.packets.push(packet);
@@ -261,12 +262,7 @@ fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std
 
     let hardware = data.hardware.as_str();
     let firmware = data.firmware.as_str();
-
-    let packets_text: Vec<Text> = data.packets
-        .iter()
-        .map(|packet| packet.to_text())
-        .flatten()
-        .collect();
+    let packets = &data.packets;
 
     terminal.draw(|mut f| {
         let chunks = Layout::default()
@@ -277,6 +273,14 @@ fn render(terminal: &mut Terminal<CrosstermBackend<Stdout>>, data: &Data) -> std
                 Constraint::Length(4)
             ].as_ref())
             .split(f.size());
+
+        let packets_text: Vec<Text> = packets
+            .iter()
+            .rev()
+            .take(chunks[1].height as usize)
+            .map(|packet| packet.to_text())
+            .flatten()
+            .collect();
 
         let statistics_text = vec![
             Text::raw(format!("  Total packets: {}\nValid packets: {}", total_packets, valid_packets)),

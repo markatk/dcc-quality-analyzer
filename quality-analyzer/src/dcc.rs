@@ -32,7 +32,8 @@ pub enum DCCPacketType {
     Unknown,
     Invalid,
     Idle,
-    Reset
+    Reset,
+    Speed
 }
 
 pub struct DCCPacket {
@@ -80,13 +81,42 @@ impl DCCPacket {
             }
         }
 
-        // get packet type
-        if data.len() == 3 && data[0] == 0xFF && data[1] == 0 && data[2] == 0xFF {
+        // verify error byte
+        let mut error_byte = 0;
+        for i in 0..data.len() - 1 {
+            error_byte ^= data[i];
+        }
+
+        if error_byte != data[data.len() - 1] {
+            return (DCCPacketType::Invalid, "Invalid packet".to_string());
+        }
+
+        // get packet type and parsed data
+        if data.len() == 3 && data[0] == 0xFF && data[1] == 0 {
             return (DCCPacketType::Idle, "Idle packet".to_string());
         }
 
-        if data.len() == 3 && data[0] == 0 && data[1] == 0 && data[2] == 0 {
+        if data.len() == 3 && data[0] == 0 && data[1] == 0 {
             return (DCCPacketType::Reset, "Reset packet".to_string());
+        }
+
+        if data.len() == 3 && data[0] & 0x7F != 0 && data[1] & 0x7F != 0 {
+            let address = data[0] & 0x7F;
+
+            let speed = match data[1] & 0x0F {
+                0 => "stop".to_string(),
+                1 => "e-stop".to_string(),
+                _ => {
+                    let mut value = ((data[1] & 0x0F) as usize * 2 + (data[1] & 0x10) as usize / 4) as i32;
+                    if data[1] & 0x20 != 0 {
+                        value = -value;
+                    }
+
+                    value.to_string()
+                }
+            };
+
+            return (DCCPacketType::Speed, format!("Basic speed packet, address={}, speed={}", address, speed));
         }
 
         return unknown_type;
