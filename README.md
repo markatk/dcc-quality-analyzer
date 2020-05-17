@@ -10,11 +10,15 @@ The analyzer only works on digital side of the protocol. Errors on the analog si
 
 ## Setup
 
-A DCC booster signal **MUST NOT** be connected directly to the arduino, otherwise it will most probably destroy the arduino. Instead a compatible arduino dcc shield or custom circuit must be used to. Most shields output the DCC data onto *pin 2*, if another pin is used the sketch needs to be updated at `#define DCC_PIN`. 
+A DCC booster signal **MUST NOT** be connected directly to the arduino, otherwise it will most probably destroy the arduino. Instead a compatible arduino dcc shield or custom circuit must be used to. Most shields output the DCC data onto *pin 2*, if another pin is used the sketch needs to be updated at `#define DCC_PIN`.
+
+The host program is running on a pc connected to the arduino via USB. The program runs in the terminal and analyzes the incoming packages by type, calculates error rates and much more. The program is written in Rust and is cross-platform compatible. The host program can be downloaded from the [releases](https://github.com/markatk/dcc-quality-analyzer/releases) or compiled directly with Rust by running `cargo install` in the *quality analyzer* directory.
+
+The host program is not strictly required since the arduino will output received data on the serial but it is strongly recommended, since all the interesting analyzation is done in the program.
 
 ## Usage
 
-
+The host program is started by running `quality-analyzer <PORT>` in the terminal where <PORT> is the OS specific serial port of the connected arduino running the dcc-quality-analzer firmware.
 
 ## Features
 
